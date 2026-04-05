@@ -1,0 +1,15 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# ML models (Checkpoints)
+checkpoints/*.pth
+*.pth
+
+# MLflow
+mlflow.db
+mlruns/
+
+# Data & Results
+data/*.h5
+results/*.npz
