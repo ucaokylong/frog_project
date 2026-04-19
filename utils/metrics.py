@@ -64,4 +64,10 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     eer_val = eer(recalls, precisions)
     f1_scores = 2 * precisions * recalls / np.clip(precisions + recalls, 1e-8, 2.0)
     
-    return recalls, precisions, ap, eer_val, np.max(f1_scores)
+    # Compute TP, FP, FN
+    tp = int(np.sum(all_tp_fp))
+    fp = len(all_tp_fp) - tp
+    fn = total_gt - tp
+    tn = 0  # Not applicable for detection tasks
+    
+    return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, tn

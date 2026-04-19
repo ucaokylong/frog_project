@@ -1,44 +1,44 @@
 #!/bin/bash
-#PBS -q GPU-1
-#PBS -l select=1:ncpus=4:ngpus=1:mem=16gb
-#PBS -l walltime=24:00:00
-#PBS -j oe
-#PBS -N FROG_LFE_Full_Train
+#SBATCH -p GPU-1
+#SBATCH -J FROG_Mamba_Final
+#SBATCH -n 8
+#SBATCH --gres=gpu:1
+#SBATCH --mem=64G
+#SBATCH --time=72:00:00
+#SBATCH -o FROG_Final_Output-%j.log
 
-cd $PBS_O_WORKDIR
+cd $SLURM_SUBMIT_DIR
 
-# 1. Kích hoạt môi trường
-source $HOME/miniconda3/bin/activate research_venv
+# 1. KÍCH HOẠT MÔI TRƯỜNG (Sử dụng cách thức an toàn nhất cho Slurm)
+source $HOME/miniconda3/etc/profile.d/conda.sh
+conda activate mamba_venv
 
-# 2. Kiểm tra và chỉ cài nếu thiếu (Smart Install)
-echo "[*] Kiểm tra môi trường thư viện..."
-REQUIRED_PKGS=("h5py" "numpy" "torch" "tqdm" "mlflow" "matplotlib" "scipy" "sklearn")
-
-for pkg in "${REQUIRED_PKGS[@]}"; do
-    # Thử import thư viện, nếu lỗi (exit code != 0) thì mới pip install
-    python -c "import $pkg" &> /dev/null
-    if [ $? -ne 0 ]; then
-        echo "--> Thiếu $pkg, đang tiến hành cài đặt..."
-        pip install $pkg
-    else
-        echo "--> $pkg: ĐÃ CÓ (Bỏ qua)"
-    fi
-done
-
-# 3. Load CUDA
+# 2. THIẾT LẬP CUDA RUNTIME (Để Mamba tìm thấy nhân CUDA khi tính toán)
 module load cuda/11.8
+export CUDA_HOME=$CUDA_ROOT
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
-# 4. Kiểm tra GPU nhanh
-nvidia-smi
+# 3. KIỂM TRA NHANH (Để chắc chắn trong Log là mọi thứ vẫn ổn)
+echo "[*] Thoi gian bat dau: $(date)"
+echo "[*] Python: $(which python)"
+python -c "import torch; import mamba_ssm; print('Check OK: Mamba da san sang de train!')"
 
-# 5. Chạy Pipeline
-echo "[STEP 1] Training Segmentation..."
-python -u train_seg.py
-
-echo "[STEP 2] Training Localization..."
+# 4. CHẠY PIPELINE TRAIN & TEST
+echo "=========================================================="
+echo "[STEP 2] Training Localization with Mamba (T=15)..."
+echo "=========================================================="
+# -u để log đẩy ra file ngay lập tức, không bị nghẽn
 python -u train_loc.py
 
-echo "[STEP 3] Final Testing..."
-python -u test.py
+# Nếu train thành công (tạo ra file weight), tự động chạy Test luôn
+if [ -f "checkpoints/lfe_mamba_loc_best.pth" ]; then
+    echo "=========================================================="
+    echo "[STEP 3] Training xong! Dang chay Test de lay ket qua AP..."
+    echo "=========================================================="
+    python -u test.py
+else
+    echo "[ERROR] Khong tim thay weight sau khi train. Kiem tra lai train_loc.py"
+    exit 1
+fi
 
-echo "[SUCCESS] Hoàn thành lúc: $(date)"
+echo "[SUCCESS] Toan bo pipeline hoan thanh luc: $(date)"

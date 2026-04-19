@@ -1,9 +1,9 @@
 #!/bin/bash
-#PBS -q GPU-1
-#PBS -l select=1:ncpus=4:ngpus=1:mem=4gb
+#PBS -q SINGLE
+#PBS -l select=1:ncpus=16:mpiprocs=16
 #PBS -l walltime=24:00:00
 #PBS -j oe
-#PBS -N FROG_LFE_Full_Test
+#PBS -N FROG_LFE_Full_Test_CPU
 
 cd $PBS_O_WORKDIR
 
@@ -15,7 +15,6 @@ echo "[*] Kiểm tra môi trường thư viện..."
 REQUIRED_PKGS=("h5py" "numpy" "torch" "tqdm" "mlflow" "matplotlib" "scipy" "sklearn")
 
 for pkg in "${REQUIRED_PKGS[@]}"; do
-    # Thử import thư viện, nếu lỗi (exit code != 0) thì mới pip install
     python -c "import $pkg" &> /dev/null
     if [ $? -ne 0 ]; then
         echo "--> Thiếu $pkg, đang tiến hành cài đặt..."
@@ -25,14 +24,11 @@ for pkg in "${REQUIRED_PKGS[@]}"; do
     fi
 done
 
-# 3. Load CUDA
-module load cuda/11.8
+# 3. Force CPU-only (vô hiệu hóa GPU)
+export CUDA_VISIBLE_DEVICES=""
 
-# 4. Kiểm tra GPU nhanh
-nvidia-smi
-
-# 5. Chạy Pipeline
-echo "[STEP 3] Final Testing..."
+# 4. Chạy Pipeline
+echo "[STEP] Final Testing (CPU only)..."
 python -u test.py
 
 echo "[SUCCESS] Hoàn thành lúc: $(date)"

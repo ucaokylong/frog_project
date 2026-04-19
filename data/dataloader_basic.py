@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 
 class FrogDataLoader:
     """
-    Xử lý nạp dữ liệu thô từ file .h5 và cấu hình cảm biến (DROW/FROG).
+    Xử lý nạp dữ liệu thô từ file .h5 và cấu hình lưới Anchor.
     """
     def __init__(self, filename, min_people=0, points_per_sector=6):
         f = h5py.File(filename, 'r')
@@ -19,8 +19,7 @@ class FrogDataLoader:
         self.split = split[:] if split is not None else None
 
         self.SCAN_WIDTH = self.scans.shape[1]
-        
-        # Cấu hình cảm biến
+        # Tự động nhận diện cấu hình cảm biến (DROW vs FROG)
         if self.SCAN_WIDTH == 450:
             self.SCAN_NEAR, self.SCAN_FAR = 0.2, 15.0
             self.SCAN_FOV = np.radians(225)
@@ -30,11 +29,9 @@ class FrogDataLoader:
             self.SCAN_FOV = np.radians(180)
             self.HARDCODED_PERSON_RADIUS = 0.4
         else:
-            raise Exception(f"Unknown scan width: {self.SCAN_WIDTH}")
+            raise Exception("Unknown dataset structure")
 
-        # Chỉ lấy các frame có số lượng người thỏa mãn
         self.selection = np.nonzero(self.circle_nums >= min_people)[0]
-        
         self.SCAN_ANGMIN, self.SCAN_ANGMAX = -self.SCAN_FOV/2, +self.SCAN_FOV/2
         self.SCAN_ANGLES = np.linspace(self.SCAN_ANGMIN, self.SCAN_ANGMAX, self.SCAN_WIDTH, endpoint=False, dtype=np.float32)
         self.SCAN_POINTS = np.stack([np.cos(self.SCAN_ANGLES), np.sin(self.SCAN_ANGLES)], axis=-1)
@@ -51,26 +48,22 @@ class FrogDataLoader:
             g_ang = np.linspace(self.SCAN_ANGMIN + self.SECTOR_AMPL/2, self.SCAN_ANGMAX - self.SECTOR_AMPL/2, self.NUM_SECTORS)
 
             dist_grid, ang_grid = np.meshgrid(g_dist, g_ang)
-            self.grid_polar = np.stack((dist_grid, ang_grid), axis=2).astype(np.float32)
-            self.grid_xy = np.stack((dist_grid * np.cos(ang_grid), dist_grid * np.sin(ang_grid)), axis=2).astype(np.float32)
+            self.grid_polar = np.stack((dist_grid, ang_grid), axis=2)
+            self.grid_xy = np.stack((dist_grid * np.cos(ang_grid), dist_grid * np.sin(ang_grid)), axis=2)
 
     def get_split(self, split_id):
-        if self.split is None: return np.arange(len(self.selection))
-        return np.nonzero(self.split[self.selection] == split_id)[0]
+        return np.nonzero(self.split[self.selection] == split_id)[0] if self.split is not None else np.arange(len(self.selection))
 
     def normalize_scan(self, scan):
-        """ Chuẩn hóa scan về khoảng [0, 1] và trả về shape (1, L) """
-        norm = 1.0 - np.clip(scan, self.SCAN_NEAR, self.SCAN_FAR) / self.SCAN_FAR
-        return norm.astype(np.float32)[np.newaxis, :] # (1, L)
+        return 1.0 - np.clip(scan, self.SCAN_NEAR, self.SCAN_FAR) / self.SCAN_FAR
 
-    def get_raw_scan(self, raw_idx):
-        scan = np.nan_to_num(self.scans[raw_idx, :], posinf=100.0)
-        return scan.astype(np.float32)
+    def __len__(self): return self.selection.shape[0]
 
-    def get_labels(self, raw_idx):
-        start = self.circle_idxs[raw_idx]
-        num = self.circle_nums[raw_idx]
-        return self.circles[start : start + num].astype(np.float32)
+    def __getitem__(self, i):
+        idx = self.selection[i]
+        scan = np.nan_to_num(self.scans[idx, :], posinf=100.0)
+        circles = self.circles[self.circle_idxs[idx]: self.circle_idxs[idx] + self.circle_nums[idx]]
+        return scan, circles
 
 def circle_overlap(circles1, circles2, radius):
     if circles2.shape[0] == 0: return np.zeros((circles1.shape[0], 0), dtype=np.float32)
@@ -79,11 +72,10 @@ def circle_overlap(circles1, circles2, radius):
     return np.maximum(0.0, 1.0 - distances / (2 * radius))
 
 class LocDataset(Dataset):
-    """ Dataset định vị với Sliding Window Temporal """
-    def __init__(self, loader, split=0, sequence_length=5, overlap_threshold=0.25):
+    """ Dataset dành cho bài toán định vị mỏ neo (Localization) """
+    def __init__(self, loader, split=0, overlap_threshold=0.25):
         super().__init__()
         self.loader = loader
-        self.T = sequence_length
         self.overlap_threshold = overlap_threshold
         self.indices = loader.get_split(split).astype(int)
         self.anchor_xy = loader.grid_xy.reshape(-1, 2)
@@ -91,22 +83,9 @@ class LocDataset(Dataset):
 
     def __len__(self): return len(self.indices)
 
-    def __getitem__(self, i):
-        idx_in_selection = self.indices[i]
-        raw_idx = self.loader.selection[idx_in_selection]
-
-        # 1. Load chuỗi T frames
-        seq_scans = []
-        for t in range(self.T):
-            target_idx = max(0, raw_idx - (self.T - 1 - t))
-            raw_scan = self.loader.get_raw_scan(target_idx)
-            seq_scans.append(self.loader.normalize_scan(raw_scan))
-        
-        # x_seq shape: (T, 1, L)
-        x_seq = torch.from_numpy(np.stack(seq_scans, axis=0))
-
-        # 2. Tạo nhãn Localization cho frame hiện tại
-        gt_circles = self.loader.get_labels(raw_idx)
+    def __getitem__(self, idx):
+        sel_idx = self.indices[idx]
+        scan, gt_circles = self.loader[sel_idx]
         gt_centers_xy = gt_circles[:, 0:2]
         gt_centers_polar = gt_circles[:, 3:5]
 
@@ -119,74 +98,56 @@ class LocDataset(Dataset):
             max_ov = np.max(overlaps, axis=1)
             gt_assign = np.argmax(overlaps, axis=1)
             
+            # Đảm bảo gán anchor tốt nhất cho mỗi GT
+            max_ov_gt = np.max(overlaps, axis=0)
+            best_anchor_idxs, _ = np.where(overlaps == max_ov_gt)
+            
             objectness = np.full(self.anchor_xy.shape[0], -1.0, dtype=np.float32)
             objectness[max_ov < self.overlap_threshold] = 0.0
             objectness[max_ov >= self.overlap_threshold] = 1.0
-            
-            # Anchor tốt nhất cho mỗi GT luôn là positive
-            max_ov_gt = np.max(overlaps, axis=0)
-            for j in range(len(max_ov_gt)):
-                best_idx = np.where(overlaps[:, j] == max_ov_gt[j])[0]
-                objectness[best_idx] = 1.0
+            objectness[np.unique(best_anchor_idxs)] = 1.0
 
             regr_target = gt_centers_polar[gt_assign, :] - self.anchor_polar
-            regr_target[:, 1] *= self.anchor_polar[:, 0] # Arc length
+            regr_target[:, 1] *= self.anchor_polar[:, 0] # Chuyển góc sang cung tròn
 
         grid_gt = np.empty((self.anchor_xy.shape[0], 3), dtype=np.float32)
         grid_gt[:, 0] = objectness
         grid_gt[:, 1:3] = self.loader.ANCHOR_REGRESSION_SCALE * (grid_gt[:, 0:1] == 1.0) * regr_target
         grid_gt = grid_gt.reshape(self.loader.NUM_SECTORS, self.loader.NUM_ANCHORS_PER_SECTOR, 3)
 
-        return x_seq, torch.from_numpy(grid_gt)
+        scan_norm = torch.from_numpy(self.loader.normalize_scan(scan).astype(np.float32)).unsqueeze(0)
+        return scan_norm, torch.from_numpy(grid_gt)
 
 class SegDataset(Dataset):
-    """ Dataset phân đoạn với Sliding Window Temporal """
-    def __init__(self, loader, split=0, sequence_length=5):
+    """ Dataset dành cho bài toán phân đoạn tia quét (Segmentation) """
+    def __init__(self, loader, split=0):
         super().__init__()
         self.loader = loader
-        self.T = sequence_length
         self.indices = loader.get_split(split).astype(int)
 
     def __len__(self): return len(self.indices)
 
-    def __getitem__(self, i):
-        idx_in_selection = self.indices[i]
-        raw_idx = self.loader.selection[idx_in_selection]
-
-        # 1. Load chuỗi T frames
-        seq_scans = []
-        raw_scan_last = None
-        for t in range(self.T):
-            target_idx = max(0, raw_idx - (self.T - 1 - t))
-            raw_scan = self.loader.get_raw_scan(target_idx)
-            seq_scans.append(self.loader.normalize_scan(raw_scan))
-            if t == self.T - 1: raw_scan_last = raw_scan # Lưu lại frame cuối để tính nhãn
+    def __getitem__(self, idx):
+        sel_idx = self.indices[idx]
+        scan, gt_circles = self.loader[sel_idx]
+        scan_xy = scan[:, None] * self.loader.SCAN_POINTS
         
-        x_seq = torch.from_numpy(np.stack(seq_scans, axis=0))
+        gt_people_xy = gt_circles[:, 0:2]
+        gt_people_r  = gt_circles[:, 2]
+        gt_people_d  = gt_circles[:, 3]
 
-        # 2. Tạo nhãn Segmentation (frame cuối)
-        scan_xy = raw_scan_last[:, None] * self.loader.SCAN_POINTS
-        gt_circles = self.loader.get_labels(raw_idx)
-        
-        if gt_circles.shape[0] == 0:
-            seg_gt = np.zeros(self.loader.SCAN_WIDTH, dtype=np.float32)
-        else:
-            gt_centers = gt_circles[:, 0:2]
-            gt_r = gt_circles[:, 2]
-            
-            # Tính khoảng cách từ mọi điểm laser tới mọi tâm người
-            # point_dist shape: (L, num_gt)
-            diff = scan_xy[:, None, :] - gt_centers[None, :, :]
-            dist = np.linalg.norm(diff, axis=2)
-            seg_gt = np.any(dist <= gt_r[None, :], axis=1).astype(np.float32)
-        
-        # Trả về (T, 1, L) và (1, L)
-        return x_seq, torch.from_numpy(seg_gt).unsqueeze(0)
+        # Mask bỏ qua những người ở quá xa giới hạn cảm biến
+        removed = np.nonzero(gt_people_d > self.loader.SCAN_FAR)[0]
+        point_dist = np.hypot(*(scan_xy[:, None, :] - gt_people_xy[None, :, :]).T).T
+        if removed.size > 0: point_dist[:, removed] = 100.0
 
-def temporal_collate(batch):
-    """
-    Gom batch cho chuỗi thời gian.
-    Input b[0]: (T, 1, L) -> Stack thành (B, T, 1, L)
-    Input b[1]: Target của frame cuối -> Stack thành (B, ...)
-    """
+        seg_gt = np.any(point_dist <= gt_people_r[None, :], axis=1).astype(np.float32)
+        scan_norm = torch.from_numpy(self.loader.normalize_scan(scan).astype(np.float32)).unsqueeze(0)
+        return scan_norm, torch.from_numpy(seg_gt).unsqueeze(0)
+
+# Các hàm hỗ trợ gom batch
+def seg_collate(batch):
+    return torch.stack([b[0] for b in batch]), torch.stack([b[1] for b in batch])
+
+def loc_collate(batch):
     return torch.stack([b[0] for b in batch]), torch.stack([b[1] for b in batch])
