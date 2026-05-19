@@ -20,14 +20,11 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     """
     Tính PR Curve theo phong cách Global Sort của tác giả.
     all_results: list of (idx_scan, people_array)
-    
-    Returns:
-        recalls, precisions, ap, eer_val, max_f1, tp, fp, fn, tn
     """
     all_scores, all_tp_fp = [], []
     total_gt = loader_frog.circles.shape[0] # Tổng số người thực tế trong file H5
 
-    for idx_scan, people in tqdm(all_results, desc=f"Benchmark matching (d={assoc_distance}m)"):
+    for idx_scan, people in tqdm(all_results, desc="Benchmark matching"):
         scan_idx = loader_frog.selection[idx_scan]
         start = loader_frog.circle_idxs[scan_idx]
         num   = loader_frog.circle_nums[scan_idx]

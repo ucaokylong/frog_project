@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .backbone import Backbone1D
+from .backbone_basic import Backbone1D
 from .common import ECA1D
 
 

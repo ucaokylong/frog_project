@@ -8,12 +8,14 @@ checkpoints/*.pth
 
 # MLflow
 mlflow.db
-mlruns/
+mlruns/ 
 
 # Data & Results
 data/*.h5
 results/*.npz
-FROG_LFE_Full_Train.o14968822
-FROG_LFE_Full_Train.o14969924
 
 *.log
+*.sh
+*.h5
+*.pth
+*.png

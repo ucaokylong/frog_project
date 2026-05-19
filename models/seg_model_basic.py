@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
-from .backbone import Backbone1D
-from .common import ResConvBlock1D
+from .backbone_basic import Backbone1D
+from .common_basic import ResConvBlock1D
 
 class SegModel1D(nn.Module):
     def __init__(self, glob=False):

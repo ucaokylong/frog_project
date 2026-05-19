@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 from data.dataloader_temporal import FrogDataLoader, scans_to_cutout
 from models.loc_model_temporal import TemporalLocModel1D
 from utils.postprocess_temporal import parse_loc
-from utils.metrics_temporal import compute_pr_curve_expert
+# ĐÃ SỬA: Thêm import compute_mean_metrics
+from utils.metrics_temporal import compute_pr_curve_expert, compute_mean_metrics
 
 # --- CẤU HÌNH ---
 TEST_PATH    = "data/frog_16-41_test.h5"
@@ -30,7 +31,11 @@ def evaluate(batch_size=32):
         print(f"Error: Model weights not found at {WEIGHTS_PATH}")
         return
 
-    model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=DEVICE))
+    # ĐÃ SỬA: Cơ chế an toàn để load weight (Chống lỗi khi train bằng Multi-GPU)
+    state_dict = torch.load(WEIGHTS_PATH, map_location=DEVICE)
+    clean_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    model.load_state_dict(clean_state_dict)
+    
     model.eval()
 
     all_results = []
@@ -58,7 +63,7 @@ def evaluate(batch_size=32):
                         stride=1, centered=True, fixed=True,
                         window_width=1.0, window_depth=0.5,
                         num_cutout_pts=56, padding_val=29.99, area_mode=True,
-                    ) # Trả về (720, 56)
+                    ) # Trả về (720, 1, 56)
                     
                     # Chuyển thành tensor (720, 1, 56)
                     ct_tensor = torch.from_numpy(ct).float()
@@ -77,8 +82,13 @@ def evaluate(batch_size=32):
             # 4) Parse kết quả
             for b in range(preds.shape[0]):
                 pred = preds[b]
-                people = parse_loc(loader, pred, threshold=0.001)
-                all_results.append((idx_list[b], people))
+                current_idx = idx_list[b]
+                # Lấy raw_scan của frame hiện tại
+                raw_scan, _ = loader[current_idx] 
+                
+                # Gọi parse_loc với raw_scan
+                people = parse_loc(loader, pred, raw_scan, threshold=0.001)
+                all_results.append((current_idx, people))
 
     # Benchmark
     metrics = {}
@@ -88,6 +98,14 @@ def evaluate(batch_size=32):
         print(f"\n--- Result for Association Distance {dist}m ---")
         print(f"AP: {AP*100:.1f}% | Peak F1: {F1*100:.1f}% | EER: {EER*100:.1f}%")
         print(f"Chi tiết: TP={TP}, FP={FP}, FN={FN}")
+
+    # ĐÃ SỬA: Gọi hàm tính Mean Metrics và in bảng Tổng kết
+    mean_res = compute_mean_metrics(metrics)
+    print("\n================ TỔNG KẾT BENCHMARK (CUTOUT) ================")
+    print(f"mAP      : {mean_res['mAP']*100:.2f}%")
+    print(f"mPEAK F1 : {mean_res['mF1']*100:.2f}%")
+    print(f"mEER     : {mean_res['mEER']*100:.2f}%")
+    print("=============================================================")
 
     # Đổi tên file lưu thành metrics_cutout
     np.savez(os.path.join(RESULTS_DIR, "drspaam_cutout_test_metrics.npz"), metrics=metrics)

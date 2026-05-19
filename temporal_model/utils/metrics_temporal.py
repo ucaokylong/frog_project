@@ -20,9 +20,6 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     """
     Tính PR Curve theo phong cách Global Sort của tác giả.
     all_results: list of (idx_scan, people_array)
-    
-    Returns:
-        recalls, precisions, ap, eer_val, max_f1, tp, fp, fn, tn
     """
     all_scores, all_tp_fp = [], []
     total_gt = loader_frog.circles.shape[0] # Tổng số người thực tế trong file H5
@@ -56,6 +53,11 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
 
     # Tính toán đường cong toàn cục
     all_scores, all_tp_fp = np.array(all_scores), np.array(all_tp_fp)
+    
+    # Bắt lỗi nếu model không dự đoán được bất kỳ object nào
+    if len(all_scores) == 0:
+        return np.array([0.0]), np.array([0.0]), 0.0, 0.0, 0.0, 0, 0, total_gt, 0
+
     sort_idx = np.argsort(-all_scores)
     tp_fp_sorted = all_tp_fp[sort_idx]
 
@@ -74,3 +76,22 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     tn = 0  # Not applicable for detection tasks
     
     return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, tn
+
+def compute_mean_metrics(metrics_dict):
+    """
+    Tính trung bình (Mean) cho AP, EER, và Peak F1 từ các mức khoảng cách.
+    Đầu vào là dictionary chứa kết quả từ compute_pr_curve_expert.
+    """
+    aps = []
+    eers = []
+    f1s = []
+    for dist, data in metrics_dict.items():
+        aps.append(data["AP"])
+        eers.append(data["EER"])
+        f1s.append(data["F1"])
+        
+    return {
+        "mAP": np.mean(aps) if aps else 0.0,
+        "mEER": np.mean(eers) if eers else 0.0,
+        "mF1": np.mean(f1s) if f1s else 0.0
+    }
