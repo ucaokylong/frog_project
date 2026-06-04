@@ -1,7 +1,7 @@
 from .dataloader_temporal import (
     FrogDataLoader, 
     TemporalLocDataset, 
-    temporal_collate  # Đổi từ seg_collate/loc_collate sang cái này
+    temporal_collate
 )
 
 __all__ = [

@@ -152,16 +152,13 @@ class TemporalLocDataset(Dataset):
         target = np.zeros((self.loader.SCAN_WIDTH, 3), dtype=np.float32)
         
         if gt_centers_xy.shape[0] > 0:
-            target[:, 0] = -1.0 # Vùng nhập nhằng (Ignore)
-            
             # Đo khoảng cách từ từng tia quét tới từng người
             dist = np.hypot(*(scan_xy[:, None, :] - gt_centers_xy[None, :, :]).T).T
             min_dist = np.min(dist, axis=1)
             gt_assign = np.argmin(dist, axis=1) # Tìm người gần nhất với mỗi tia
             
-            # Gán nhãn Classification
-            target[min_dist < 0.35, 0] = 1.0 # Chắc chắn là người
-            target[min_dist > 0.50, 0] = 0.0 # Chắc chắn là background
+            # ĐÃ SỬA: Loại bỏ nhãn -1.0. Dùng Hard Threshold dứt khoát 1.0 và 0.0 chuẩn DR-SPAAM
+            target[:, 0] = (min_dist <= self.loader.HARDCODED_PERSON_RADIUS).astype(np.float32)
             
             # Tính nhãn Regression (dx, dy) theo hệ tọa độ CANONICAL
             scan_r = scan

@@ -19,3 +19,4 @@ results/*.npz
 *.h5
 *.pth
 *.png
+*.npz

@@ -1,26 +1,25 @@
 from .loss_temporal import (
     loc_model_loss_torch,
-    dice_loss_torch,      # Export thêm để nếu cần debug
+    dice_loss_torch,      
     weighted_ce_loss_torch
 )
 from .metrics_temporal import (
     compute_pr_curve_expert, 
     proper_ap, 
     eer,
-    compute_mean_metrics  # THÊM HÀM MỚI VÀO ĐÂY
+    compute_mean_metrics  
 )
 from .postprocess_temporal import (
-    parse_loc
+    parse_loc_voting  # ĐÃ SỬA TÊN HÀM TẠI ĐÂY
 )
 
 __all__ = [
-    "seg_mixed_loss_torch",
     "loc_model_loss_torch",
     "dice_loss_torch",
     "weighted_ce_loss_torch",
     "compute_pr_curve_expert",
     "proper_ap",
     "eer",
-    "compute_mean_metrics", # THÊM HÀM MỚI VÀO ĐÂY
-    "parse_loc"
+    "compute_mean_metrics", 
+    "parse_loc_voting"  # ĐÃ SỬA TÊN HÀM TẠI ĐÂY
 ]

@@ -13,10 +13,10 @@ def weighted_ce_loss_torch(y_true, logits, beta=1.5):
     bce = F.binary_cross_entropy_with_logits(logits, y_true, pos_weight=pos_weight)
     return bce
 
+
 def loc_model_loss_torch(y_true, y_pred):
     """
-    Hàm loss cho Localization Cutout (BCE Chuẩn + Smooth L1)
-    Đã loại bỏ QFL, kết hợp hoàn hảo với Dataloader Hard Threshold (0.4m) và Voting NMS.
+    Hàm loss cho Localization Cutout.
     y_true/y_pred: (B, 720, 3) -> [objectness, dx, dy]
     """
     gt_obj = y_true[..., 0]
@@ -24,20 +24,16 @@ def loc_model_loss_torch(y_true, y_pred):
     pr_obj = y_pred[..., 0]
     pr_reg = y_pred[..., 1:3]
 
-    # pos_mask để chỉ tính loss hồi quy cho các tia quét trúng người
+    # Mask cho các cutout có người (1.0) và không có người (0.0), bỏ qua (-1.0)
     pos_mask = (gt_obj > 0.5).float()
+    valid_mask = (gt_obj >= 0.0).float()
     num_pos = pos_mask.sum() + 1e-6
 
-    # ========================================================
-    # 1. CLASSIFICATION LOSS (BCE NGUYÊN BẢN)
-    # Ép mạng tự tin tuyệt đối 1.0 (người) hoặc 0.0 (nền).
-    # Vì dataloader mới không còn nhãn -1.0, ta tính mean trực tiếp trên toàn bộ 720 tia.
-    # ========================================================
-    cls_loss = F.binary_cross_entropy_with_logits(pr_obj, gt_obj, reduction='mean')
+    # 1. Classification Loss (BCE)
+    cls_loss_all = F.binary_cross_entropy_with_logits(pr_obj, pos_mask, reduction='none')
+    cls_loss = (valid_mask * cls_loss_all).sum() / (valid_mask.sum() + 1e-6)
 
-    # ========================================================
-    # 2. REGRESSION LOSS (Smooth L1 - Giữ nguyên chuẩn tác giả)
-    # ========================================================
+    # 2. Regression Loss (Smooth L1)
     sigma_sq = 9.0 
     diff = torch.abs(gt_reg - pr_reg)
     threshold = 1.0 / sigma_sq
@@ -47,9 +43,7 @@ def loc_model_loss_torch(y_true, y_pred):
     reg_loss_lin = diff - 0.5 / sigma_sq
     
     loss_all = piecewise * reg_loss_quad + (1.0 - piecewise) * reg_loss_lin
-    
-    # Chỉ phạt sai số tọa độ ở những tia CÓ NGƯỜI (pos_mask)
+    # Chỉ tính Regression loss trên các cutout CÓ người (pos_mask)
     reg_loss = (pos_mask.unsqueeze(-1) * loss_all).sum() / num_pos
 
-    # Trả về tổng Loss với tỷ trọng 1:1 chuẩn mực
     return cls_loss + reg_loss
