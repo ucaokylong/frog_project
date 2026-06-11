@@ -2,20 +2,12 @@ import numpy as np
 from tqdm import tqdm
 
 def proper_ap(recs, precs, points=11):
-    """ 
-    11-point interpolated AP (PASCAL VOC 2007 style).
-    Tính trung bình Precision tại 11 mức Recall (0.0, 0.1, ..., 1.0)
-    để so sánh công bằng với code benchmark gốc của tác giả DR-SPAAM.
-    """
+    """ 11-point interpolated AP chuẩn benchmark. """
     new_r = np.linspace(0.0, 1.0, num=points, endpoint=True)
     new_p = []
-    for rec_threshold in new_r:
-        point_idxs = np.nonzero(recs >= rec_threshold)[0]
-        if len(point_idxs) > 0:
-            new_p.append(np.max(precs[point_idxs]))
-        else:
-            new_p.append(0.0)
-    new_p = np.array(new_p, dtype=np.float32)
+    for r_thr in new_r:
+        idxs = np.nonzero(recs >= r_thr)[0]
+        new_p.append(np.max(precs[idxs]) if len(idxs) > 0 else 0.0)
     return np.mean(new_p)
 
 def eer(recs, precs):
@@ -28,6 +20,9 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     """
     Tính PR Curve theo phong cách Global Sort của tác giả.
     all_results: list of (idx_scan, people_array)
+    
+    Returns:
+        recalls, precisions, ap, eer_val, max_f1, tp, fp, fn, tn
     """
     all_scores, all_tp_fp = [], []
     total_gt = loader_frog.circles.shape[0] # Tổng số người thực tế trong file H5
@@ -61,11 +56,6 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
 
     # Tính toán đường cong toàn cục
     all_scores, all_tp_fp = np.array(all_scores), np.array(all_tp_fp)
-    
-    # Bắt lỗi nếu model không dự đoán được bất kỳ object nào
-    if len(all_scores) == 0:
-        return np.array([0.0]), np.array([0.0]), 0.0, 0.0, 0.0, 0, 0, total_gt, 0
-
     sort_idx = np.argsort(-all_scores)
     tp_fp_sorted = all_tp_fp[sort_idx]
 
@@ -73,8 +63,7 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     precisions = tp_cumsum / np.arange(1, len(tp_cumsum) + 1)
     recalls = tp_cumsum / (total_gt + 1e-8)
 
-    # ĐÃ QUAY VỀ: Gọi proper_ap 11-point (truyền rõ tham số points=11)
-    ap = proper_ap(recalls, precisions, points=11)
+    ap = proper_ap(recalls, precisions)
     eer_val = eer(recalls, precisions)
     f1_scores = 2 * precisions * recalls / np.clip(precisions + recalls, 1e-8, 2.0)
     
@@ -82,20 +71,6 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     tp = int(np.sum(all_tp_fp))
     fp = len(all_tp_fp) - tp
     fn = total_gt - tp
-    tn = 0  
+    tn = 0  # Not applicable for detection tasks
     
     return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, tn
-
-def compute_mean_metrics(metrics_dict):
-    """ Tính trung bình (Mean) cho AP, EER, và Peak F1 từ các mức khoảng cách. """
-    aps, eers, f1s = [], [], []
-    for dist, data in metrics_dict.items():
-        aps.append(data["AP"])
-        eers.append(data["EER"])
-        f1s.append(data["F1"])
-        
-    return {
-        "mAP": np.mean(aps) if aps else 0.0,
-        "mEER": np.mean(eers) if eers else 0.0,
-        "mF1": np.mean(f1s) if f1s else 0.0
-    }

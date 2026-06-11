@@ -1,44 +1,68 @@
 #!/bin/bash
 #SBATCH -p GPU-1
-#SBATCH -J FROG_Mamba_Final
+#SBATCH -J FROG_LFE_PPN
 #SBATCH -n 8
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 #SBATCH --time=72:00:00
-#SBATCH -o FROG_Final_Output-%j.log
+#SBATCH -o FROG_LFE_Output-%j.log
 
 cd $SLURM_SUBMIT_DIR
 
-# 1. KÍCH HOẠT MÔI TRƯỜNG (Sử dụng cách thức an toàn nhất cho Slurm)
+# ==========================================
+# BƯỚC 0: DỌN DẸP "BÓNG MA" MÔI TRƯỜNG CŨ
+# ==========================================
+unset PYTHONPATH
+unset PYTHONHOME
+
+# ==========================================
+# BƯỚC 1: KÍCH HOẠT MÔI TRƯỜNG CHUẨN
+# ==========================================
 source $HOME/miniconda3/etc/profile.d/conda.sh
 conda activate mamba_venv
 
-# 2. THIẾT LẬP CUDA RUNTIME (Để Mamba tìm thấy nhân CUDA khi tính toán)
+# Ép hệ thống ưu tiên tuyệt đối Python của env
+export PATH=$HOME/miniconda3/envs/mamba_venv/bin:$PATH
+
+# ==========================================
+# BƯỚC 2: THIẾT LẬP CUDA RUNTIME
+# ==========================================
 module load cuda/11.8
 export CUDA_HOME=$CUDA_ROOT
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
-# 3. KIỂM TRA NHANH (Để chắc chắn trong Log là mọi thứ vẫn ổn)
 echo "[*] Thoi gian bat dau: $(date)"
-echo "[*] Python: $(which python)"
-python -c "import torch; import mamba_ssm; print('Check OK: Mamba da san sang de train!')"
+echo "[*] Python dang dung: $(which python)"
 
-# 4. CHẠY PIPELINE TRAIN & TEST
-echo "=========================================================="
-echo "[STEP 2] Training Localization with Mamba (T=15)..."
-echo "=========================================================="
-# -u để log đẩy ra file ngay lập tức, không bị nghẽn
-python -u train_loc.py
+# ==========================================
+# BƯỚC 3: PIPELINE LFE-PPN (SEG -> LOC -> TEST)
+# ==========================================
 
-# Nếu train thành công (tạo ra file weight), tự động chạy Test luôn
-if [ -f "checkpoints/lfe_mamba_loc_best.pth" ]; then
+echo "=========================================================="
+echo "[STEP 1] Training LFE Segmentation (Basic)..."
+echo "=========================================================="
+python -u train_seg_basic.py
+
+# Kiểm tra nếu train Seg thành công (có file lfe_seg_best.pth) thì mới chạy tiếp Loc
+if [ -f "checkpoints/lfe_seg_best.pth" ]; then
     echo "=========================================================="
-    echo "[STEP 3] Training xong! Dang chay Test de lay ket qua AP..."
+    echo "[STEP 2] Training LFE Localization PPN (Basic)..."
     echo "=========================================================="
-    python -u test.py
+    python -u train_loc_basic.py
+    
+    # Kiểm tra nếu train Loc thành công (có file lfe_ppn_best.pth) thì mới chạy Test
+    if [ -f "checkpoints/lfe_ppn_best.pth" ]; then
+        echo "=========================================================="
+        echo "[STEP 3] Testing LFE-PPN Pipeline de lay mAP..."
+        echo "=========================================================="
+        python -u test_basic.py
+    else
+        echo "[ERROR] Train Loc PPN that bai (Khong thay weight lfe_ppn_best.pth). Dung pipeline."
+        exit 1
+    fi
 else
-    echo "[ERROR] Khong tim thay weight sau khi train. Kiem tra lai train_loc.py"
+    echo "[ERROR] Train Seg that bai (Khong thay weight lfe_seg_best.pth). Dung pipeline."
     exit 1
 fi
 
-echo "[SUCCESS] Toan bo pipeline hoan thanh luc: $(date)"
+echo "[SUCCESS] Toan bo LFE-PPN pipeline hoan thanh luc: $(date)"

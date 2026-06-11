@@ -12,7 +12,7 @@ from utils.metrics_temporal import compute_pr_curve_expert, compute_mean_metrics
 
 # --- CẤU HÌNH ---
 TEST_PATH    = "data/frog_16-41_test.h5"
-WEIGHTS_PATH = "checkpoints/drspaam_loc_cutout_best.pth"  
+WEIGHTS_PATH = "checkpoints/drspaam_loc_cutout_best_SOTA.pth"  
 RESULTS_DIR  = "results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 

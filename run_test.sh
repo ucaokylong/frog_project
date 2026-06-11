@@ -1,38 +1,47 @@
 #!/bin/bash
-#PBS -q GPU-1
-#PBS -l select=1:ncpus=4:ngpus=1:mem=4gb
-#PBS -l walltime=24:00:00
-#PBS -j oe
-#PBS -N FROG_LFE_Full_Test
+#SBATCH -p GPU-1
+#SBATCH -J FROG_LFE_PPN_TESTING
+#SBATCH -n 8
+#SBATCH --gres=gpu:1
+#SBATCH --mem=32G
+#SBATCH --time=48:00:00
+#SBATCH -o FROG_LFE_Output-%j.log
 
-cd $PBS_O_WORKDIR
+cd $SLURM_SUBMIT_DIR
 
-# 1. Kích hoạt môi trường
-source $HOME/miniconda3/bin/activate research_venv
+# ==========================================
+# BƯỚC 0: DỌN DẸP "BÓNG MA" MÔI TRƯỜNG CŨ
+# ==========================================
+unset PYTHONPATH
+unset PYTHONHOME
 
-# 2. Kiểm tra và chỉ cài nếu thiếu (Smart Install)
-echo "[*] Kiểm tra môi trường thư viện..."
-REQUIRED_PKGS=("h5py" "numpy" "torch" "tqdm" "mlflow" "matplotlib" "scipy" "sklearn")
+# ==========================================
+# BƯỚC 1: KÍCH HOẠT MÔI TRƯỜNG CHUẨN
+# ==========================================
+source $HOME/miniconda3/etc/profile.d/conda.sh
+conda activate mamba_venv
 
-for pkg in "${REQUIRED_PKGS[@]}"; do
-    # Thử import thư viện, nếu lỗi (exit code != 0) thì mới pip install
-    python -c "import $pkg" &> /dev/null
-    if [ $? -ne 0 ]; then
-        echo "--> Thiếu $pkg, đang tiến hành cài đặt..."
-        pip install $pkg
-    else
-        echo "--> $pkg: ĐÃ CÓ (Bỏ qua)"
-    fi
-done
+# Ép hệ thống ưu tiên tuyệt đối Python của env
+export PATH=$HOME/miniconda3/envs/mamba_venv/bin:$PATH
 
-# 3. Load CUDA
+# ==========================================
+# BƯỚC 2: THIẾT LẬP CUDA RUNTIME
+# ==========================================
 module load cuda/11.8
+export CUDA_HOME=$CUDA_ROOT
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
 
-# 4. Kiểm tra GPU nhanh
-nvidia-smi
+echo "[*] Thoi gian bat dau: $(date)"
+echo "[*] Python dang dung: $(which python)"
 
-# 5. Chạy Pipeline
-echo "[STEP 3] Final Testing..."
-python -u test.py
+# ==========================================
+# BƯỚC 3: PIPELINE LFE-PPN (TEST)
+# ==========================================
 
-echo "[SUCCESS] Hoàn thành lúc: $(date)"
+echo "=========================================================="
+echo "[STEP 1] TESTING LFE Segmentation (Basic)..."
+echo "=========================================================="
+
+python -u test_basic.py
+
+echo "[SUCCESS] TESTING LFE-PPN pipeline hoan thanh luc: $(date)"

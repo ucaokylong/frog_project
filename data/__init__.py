@@ -1,13 +1,17 @@
-from .dataloader import (
-    FrogDataLoader, 
-    SegDataset, 
-    LocDataset, 
-    temporal_collate  # Đổi từ seg_collate/loc_collate sang cái này
+# SỬA FILE: frog_project/data/__init__.py
+
+from .dataloader_basic import (
+    FrogDataLoader,
+    LocDataset,
+    SegDataset,
+    seg_collate,
+    loc_collate
 )
 
 __all__ = [
     "FrogDataLoader",
-    "SegDataset",
     "LocDataset",
-    "temporal_collate"
+    "SegDataset",
+    "seg_collate",
+    "loc_collate"
 ]

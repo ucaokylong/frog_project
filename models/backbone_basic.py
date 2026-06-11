@@ -1,5 +1,5 @@
 import torch.nn as nn
-from .common import ResConvBlock1D, StridedDWPool1D
+from .common_basic import ResConvBlock1D, StridedDWPool1D
 
 
 class Backbone1D(nn.Module):

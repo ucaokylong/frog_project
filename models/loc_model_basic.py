@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .backbone_basic import Backbone1D
-from .common import ECA1D
+from .common_basic import ECA1D
 
 
 class DecoupledHead1D(nn.Module):

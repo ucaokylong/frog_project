@@ -1,22 +1,26 @@
 import numpy as np
 from tqdm import tqdm
 
-def proper_ap(recs, precs, points=11):
+def proper_ap(recs, precs):
     """ 
-    11-point interpolated AP (PASCAL VOC 2007 style).
-    Tính trung bình Precision tại 11 mức Recall (0.0, 0.1, ..., 1.0)
-    để so sánh công bằng với code benchmark gốc của tác giả DR-SPAAM.
+    All-point interpolated AP (AUC - VOC 2010+ style).
+    Tính diện tích chính xác dưới đường cong Precision-Recall 
+    bằng cách quét qua tất cả các điểm thay vì chỉ lấy 11 mốc cố định.
     """
-    new_r = np.linspace(0.0, 1.0, num=points, endpoint=True)
-    new_p = []
-    for rec_threshold in new_r:
-        point_idxs = np.nonzero(recs >= rec_threshold)[0]
-        if len(point_idxs) > 0:
-            new_p.append(np.max(precs[point_idxs]))
-        else:
-            new_p.append(0.0)
-    new_p = np.array(new_p, dtype=np.float32)
-    return np.mean(new_p)
+    # Thêm các điểm biên an toàn
+    mrec = np.concatenate(([0.], recs, [1.]))
+    mpre = np.concatenate(([0.], precs, [0.]))
+
+    # Tạo đường bao bậc thang (Envelope) từ phải sang trái để làm mượt đường cong
+    for i in range(mpre.size - 1, 0, -1):
+        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+    # Tìm các vị trí mà Recall có sự thay đổi giá trị
+    i = np.where(mrec[1:] != mrec[:-1])[0]
+
+    # Tính tổng diện tích của các hình chữ nhật bậc thang
+    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap
 
 def eer(recs, precs):
     """ Equal Error Rate: điểm P xấp xỉ R. """
@@ -73,8 +77,8 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     precisions = tp_cumsum / np.arange(1, len(tp_cumsum) + 1)
     recalls = tp_cumsum / (total_gt + 1e-8)
 
-    # ĐÃ QUAY VỀ: Gọi proper_ap 11-point (truyền rõ tham số points=11)
-    ap = proper_ap(recalls, precisions, points=11)
+    # ĐÃ SỬA: Gọi proper_ap All-point (đã loại bỏ tham số points=11)
+    ap = proper_ap(recalls, precisions)
     eer_val = eer(recalls, precisions)
     f1_scores = 2 * precisions * recalls / np.clip(precisions + recalls, 1e-8, 2.0)
     

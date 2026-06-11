@@ -102,8 +102,8 @@ class LocDataset(Dataset):
             max_ov_gt = np.max(overlaps, axis=0)
             best_anchor_idxs, _ = np.where(overlaps == max_ov_gt)
             
-            objectness = np.full(self.anchor_xy.shape[0], -1.0, dtype=np.float32)
-            objectness[max_ov < self.overlap_threshold] = 0.0
+            # ĐÃ SỬA: Loại bỏ nhãn -1.0, dùng phân loại dứt khoát (Hard Threshold)
+            objectness = np.zeros(self.anchor_xy.shape[0], dtype=np.float32)
             objectness[max_ov >= self.overlap_threshold] = 1.0
             objectness[np.unique(best_anchor_idxs)] = 1.0
 

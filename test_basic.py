@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 
 from data.dataloader_basic import FrogDataLoader
 from models.loc_model_basic import LocModel1D
-from utils.postprocess import parse_loc
-from utils.metrics import compute_pr_curve_expert
+from utils.postprocess_basic import parse_loc
+from utils.metrics_basic import compute_pr_curve_expert
 
 # --- CẤU HÌNH ---
 TEST_PATH    = "data/frog_16-41_test.h5"
-WEIGHTS_PATH = "checkpoints/lfe_ppn_best_V3.pth"
+WEIGHTS_PATH = "checkpoints/lfe_ppn_best.pth"
 RESULTS_DIR  = "results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -50,17 +50,36 @@ def evaluate(batch_size=64):
                 idx_list.append(i)
 
             # 2) stack thành tensor (B, 1, L)
-            scans_np = np.stack(scans_list, axis=0)                 # (B, L)
-            x = torch.from_numpy(scans_np).unsqueeze(1).to(DEVICE)  # (B, 1, L)
+            scans_np = np.stack(scans_list, axis=0)                
+            x = torch.from_numpy(scans_np).unsqueeze(1).to(DEVICE)  
 
             # 3) chạy model một lần cho cả batch
-            preds = model(x).cpu().numpy()                          # (B, S, A, 3)
+            preds = model(x).cpu().numpy()                          
 
             # 4) parse từng phần tử trong batch
             for b in range(preds.shape[0]):
-                pred = preds[b]                                     # (S, A, 3)
-                people = parse_loc(loader, pred, threshold=0.001)
-                all_results.append((idx_list[b], people))
+                pred = preds[b]                                     
+                
+                # SỬA: Lọc 10m và giữ Threshold 0.01
+                raw_people = parse_loc(loader, pred, threshold=0.01)
+                
+                filtered_people = []
+                if raw_people is not None:
+                    for p in raw_people:
+                        c_score, c_x, c_y = p[0], p[1], p[2]
+                        c_dist = np.hypot(c_x, c_y)
+                        
+                        # CHỈ GIỮ LẠI dự đoán nằm trong phạm vi 10 mét
+                        if c_dist <= 10.0:
+                            filtered_people.append(p)
+                
+                if len(filtered_people) > 0:
+                    filtered_people = np.array(filtered_people, dtype=np.float32)
+                    filtered_people = filtered_people[np.argsort(-filtered_people[:, 0], kind='stable'), :]
+                else:
+                    filtered_people = np.array([], dtype=np.float32)
+                    
+                all_results.append((idx_list[b], filtered_people))
 
     # Benchmark tại 2 mốc 0.5m và 0.3m
     metrics = {}
@@ -125,7 +144,6 @@ def _create_advanced_plots(metrics, mAP, mF1, mEER):
     ax2.bar(x, F1s, width, label='Peak F1', color='#ff7f0e', alpha=0.85)
     ax2.bar(x + width, EERs, width, label='EER', color='#2ca02c', alpha=0.85)
     
-    # Sửa lỗi: Nhân 100 để cùng scale với cột Bar
     ax2.axhline(y=mAP*100, color='#1f77b4', linestyle='--', alpha=0.6, label=f'mAP={mAP*100:.1f}%')
     ax2.axhline(y=mF1*100, color='#ff7f0e', linestyle='--', alpha=0.6, label=f'mPeak F1={mF1*100:.1f}%')
     ax2.axhline(y=mEER*100, color='#2ca02c', linestyle='--', alpha=0.6, label=f'mEER={mEER*100:.1f}%')
@@ -141,32 +159,27 @@ def _create_advanced_plots(metrics, mAP, mF1, mEER):
     fig2.savefig(os.path.join(RESULTS_DIR, "plot_2_metrics_comparison.png"), dpi=200)
 
     # --- PLOT 3: CONFUSION MATRIX ---
-    # Vẽ các ma trận cạnh nhau tùy số lượng dist
     fig3, axes3 = plt.subplots(1, len(distances), figsize=(5 * len(distances) + 2, 6))
     if len(distances) == 1: axes3 = [axes3]
 
     for idx, dist in enumerate(distances):
         ax = axes3[idx]
         tp, fp, fn = metrics[dist]["TP"], metrics[dist]["FP"], metrics[dist]["FN"]
-        tn = "N/A" # Bài toán Detection không có khái niệm True Negative chuẩn mực
+        tn = "N/A"
 
         ax.set_xlim(0, 2)
         ax.set_ylim(0, 2)
         ax.invert_yaxis()
 
-        # Ô True Positive (Xanh lá nhạt)
         ax.add_patch(plt.Rectangle((0, 0), 1, 1, facecolor='#d4edda', edgecolor='black', lw=1))
         ax.text(0.5, 0.5, f"True Positive (TP)\n{tp:,}", ha='center', va='center', fontsize=12, fontweight='bold', color='#155724')
 
-        # Ô False Negative (Đỏ nhạt)
         ax.add_patch(plt.Rectangle((1, 0), 1, 1, facecolor='#f8d7da', edgecolor='black', lw=1))
         ax.text(1.5, 0.5, f"False Negative (FN)\n{fn:,}", ha='center', va='center', fontsize=12, fontweight='bold', color='#721c24')
 
-        # Ô False Positive (Vàng nhạt)
         ax.add_patch(plt.Rectangle((0, 1), 1, 1, facecolor='#fff3cd', edgecolor='black', lw=1))
         ax.text(0.5, 1.5, f"False Positive (FP)\n{fp:,}", ha='center', va='center', fontsize=12, fontweight='bold', color='#856404')
 
-        # Ô True Negative (Xám nhạt)
         ax.add_patch(plt.Rectangle((1, 1), 1, 1, facecolor='#e2e3e5', edgecolor='black', lw=1))
         ax.text(1.5, 1.5, f"True Negative (TN)\n{tn}", ha='center', va='center', fontsize=12, fontweight='bold', color='#383d41')
 
@@ -200,8 +213,8 @@ def _create_advanced_plots(metrics, mAP, mF1, mEER):
         summary_text += f"    • Counts   -> TP: {metrics[dist]['TP']:,} | FP: {metrics[dist]['FP']:,} | FN: {metrics[dist]['FN']:,}\n\n"
     
     ax4.text(0.05, 0.95, summary_text, fontsize=12, family='monospace',
-            verticalalignment='top', 
-            bbox=dict(boxstyle='round,pad=1', facecolor='#f8f9fa', edgecolor='#dee2e6'))
+             verticalalignment='top', 
+             bbox=dict(boxstyle='round,pad=1', facecolor='#f8f9fa', edgecolor='#dee2e6'))
     
     fig4.tight_layout()
     fig4.savefig(os.path.join(RESULTS_DIR, "plot_4_summary_report.png"), dpi=200)
