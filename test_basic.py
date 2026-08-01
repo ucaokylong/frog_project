@@ -1,15 +1,23 @@
 import os
+import time
 import torch
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+
+# Library used for hardware-independent complexity analysis
+try:
+    from thop import profile
+except ImportError:
+    print("Warning: Please install thop via 'pip install thop' for FLOPs profiling.")
+    profile = None
 
 from data.dataloader_basic import FrogDataLoader
 from models.loc_model_basic import LocModel1D
 from utils.postprocess_basic import parse_loc
 from utils.metrics_basic import compute_pr_curve_expert
 
-# --- CẤU HÌNH ---
+# --- CONFIGURATION ---
 TEST_PATH    = "data/frog_16-41_test.h5"
 WEIGHTS_PATH = "checkpoints/lfe_ppn_best.pth"
 RESULTS_DIR  = "results"
@@ -31,36 +39,59 @@ def evaluate(batch_size=64):
     model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=DEVICE))
     model.eval()
 
+    # =========================================================================
+    # COMPUTE HARDWARE-INDEPENDENT COMPLEXITY (FLOPs & Parameters)
+    # =========================================================================
+    flops_str, params_str = "N/A", "N/A"
+    if profile is not None:
+        # Simulate a single input scan frame with shape (1, 1, 720)
+        dummy_input = torch.randn(1, 1, loader.SCAN_WIDTH).to(DEVICE)
+        flops, params = profile(model, inputs=(dummy_input,), verbose=False)
+        flops_str = f"{flops / 1e6:.2f} MFLOPs"     # Million Floating Point Operations
+        params_str = f"{params / 1e3:.2f} K"        # Thousand Parameters
+        print(f"\n[Model Complexity] Total Parameters: {params_str} | Computation: {flops_str}")
+
     all_results = []
     print("Running Inference (Basic LFE-PPN)...")
 
+    # Arrays to record synchronized inference timing parameters
+    pure_inference_times = []
+    N = len(loader)
+
     with torch.no_grad():
-        N = len(loader)
-        # duyệt theo batch index
         for start in tqdm(range(0, N, batch_size), desc="Inference"):
             end = min(start + batch_size, N)
             scans_list = []
             idx_list   = []
 
-            # 1) gom batch bằng tay
+            # 1) Manual batch aggregation
             for i in range(start, end):
                 scan, _ = loader[i]
                 scan_norm = loader.normalize_scan(scan).astype(np.float32)
                 scans_list.append(scan_norm)
                 idx_list.append(i)
 
-            # 2) stack thành tensor (B, 1, L)
             scans_np = np.stack(scans_list, axis=0)                
             x = torch.from_numpy(scans_np).unsqueeze(1).to(DEVICE)  
 
-            # 3) chạy model một lần cho cả batch
-            preds = model(x).cpu().numpy()                          
+            # 2) CUDA SYNCHRONIZED TIMING INFERENCE PER BATCH
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            t_start = time.perf_counter()
 
-            # 4) parse từng phần tử trong batch
+            preds = model(x).cpu().numpy()                                          
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            t_end = time.perf_counter()
+            
+            # Compute average latency per single scan frame within this batch
+            batch_latency = (t_end - t_start) / x.size(0)
+            pure_inference_times.append(batch_latency)
+
+            # 3) Parse batch elements via post-processing decoders
             for b in range(preds.shape[0]):
-                pred = preds[b]                                     
-                
-                # SỬA: Lọc 10m và giữ Threshold 0.01
+                pred = preds[b]                                                     
                 raw_people = parse_loc(loader, pred, threshold=0.01)
                 
                 filtered_people = []
@@ -68,8 +99,6 @@ def evaluate(batch_size=64):
                     for p in raw_people:
                         c_score, c_x, c_y = p[0], p[1], p[2]
                         c_dist = np.hypot(c_x, c_y)
-                        
-                        # CHỈ GIỮ LẠI dự đoán nằm trong phạm vi 10 mét
                         if c_dist <= 10.0:
                             filtered_people.append(p)
                 
@@ -81,35 +110,41 @@ def evaluate(batch_size=64):
                     
                 all_results.append((idx_list[b], filtered_people))
 
-    # Benchmark tại 2 mốc 0.5m và 0.3m
+    # Calculate average model processing execution latency per scan frame in milliseconds
+    avg_latency_ms = np.mean(pure_inference_times) * 1000.0
+
+    # Execute SOTA benchmark evaluations at strict distance thresholds (0.5m and 0.3m)
     metrics = {}
     for dist in [0.5, 0.3]:
-        R, P, AP, EER, F1, tp, fp, fn, tn = compute_pr_curve_expert(loader, all_results, assoc_distance=dist)
-        metrics[dist] = {"R": R, "P": P, "AP": AP, "EER": EER, "F1": F1, "TP": tp, "FP": fp, "FN": fn}
+        R, P, AP, EER, F1, tp, fp, fn, p_final, r_final, f1_final = compute_pr_curve_expert(loader, all_results, assoc_distance=dist)
+        metrics[dist] = {
+            "R": R, "P": P, "AP": AP, "EER": EER, "F1": F1, "TP": tp, "FP": fp, "FN": fn,
+            "P_Final": p_final, "R_Final": r_final, "F1_Final": f1_final
+        }
         print(f"\n--- Result for Association Distance {dist}m ---")
         print(f"AP: {AP*100:.1f}% | Peak F1: {F1*100:.1f}% | EER: {EER*100:.1f}%")
+        print(f"Precision: {p_final*100:.1f}% | Recall: {r_final*100:.1f}% | F1-Score: {f1_final*100:.1f}%")
         print(f"TP: {tp} | FP: {fp} | FN: {fn}")
 
-    # Calculate macro-averaged metrics
     mAP = np.mean([metrics[dist]["AP"] for dist in metrics.keys()])
     mF1 = np.mean([metrics[dist]["F1"] for dist in metrics.keys()])
     mEER = np.mean([metrics[dist]["EER"] for dist in metrics.keys()])
     
     print(f"\n--- Macro-Averaged Metrics ---")
     print(f"mAP: {mAP*100:.1f}% | mPeak F1: {mF1*100:.1f}% | mEER: {mEER*100:.1f}%")
+    print(f"Average Model Latency per Scan: {avg_latency_ms:.3f} ms")
 
-    # Lưu kết quả ra file NPZ để sau này vẽ biểu đồ
+    # Export extensive benchmark statistics to file storage
     np.savez(os.path.join(RESULTS_DIR, "test_metrics.npz"), 
-             metrics=metrics, mAP=mAP, mF1=mF1, mEER=mEER)
+             metrics=metrics, mAP=mAP, mF1=mF1, mEER=mEER, 
+             latency=avg_latency_ms, FLOPs=flops_str, Params=params_str)
 
-    # Khởi tạo vẽ 4 biểu đồ Advanced
-    _create_advanced_plots(metrics, mAP, mF1, mEER)
-    
-    print(f"\n>>> Results saved in {RESULTS_DIR}/")
+    _create_advanced_plots(metrics, mAP, mF1, mEER, avg_latency_ms, flops_str, params_str)
+    print(f"\n>>> Results and advanced charts saved successfully in {RESULTS_DIR}/")
 
 
-def _create_advanced_plots(metrics, mAP, mF1, mEER):
-    """Vẽ 4 biểu đồ Advanced độc lập, bao gồm Confusion Matrix"""
+def _create_advanced_plots(metrics, mAP, mF1, mEER, latency, flops_str, params_str):
+    """ Generates 4 advanced independent scientific figures for publication. """
     plt.style.use('seaborn-v0_8-whitegrid') 
     colors = ['#1f77b4', '#ff7f0e']
     distances = sorted(metrics.keys())
@@ -193,26 +228,32 @@ def _create_advanced_plots(metrics, mAP, mF1, mEER):
     fig3.tight_layout()
     fig3.savefig(os.path.join(RESULTS_DIR, "plot_3_confusion_matrix.png"), dpi=200)
 
-    # --- PLOT 4: SUMMARY REPORT TỐI ƯU ---
-    fig4, ax4 = plt.subplots(figsize=(8, 5))
+    # --- PLOT 4: INTEGRATED SUMMARY REPORT ---
+    fig4, ax4 = plt.subplots(figsize=(8, 6))
     ax4.axis('off')
     
-    summary_text = "MODEL EVALUATION SUMMARY (LFE-PPN)\n"
-    summary_text += "="*60 + "\n\n"
-    summary_text += "➤ MACRO-AVERAGED METRICS:\n"
+    summary_text = "PEOPLE DETECTION MODEL - QUANTITATIVE SUMMARY REPORT\n"
+    summary_text += "="*65 + "\n\n"
+    summary_text += "➤ COMPUTATIONAL HARDWARE-INDEPENDENT METRICS:\n"
+    summary_text += f"    • Total Model Parameters : {params_str}\n"
+    summary_text += f"    • Complexity (FLOPs)    : {flops_str}\n"
+    summary_text += f"    • Average Latency/Scan  : {latency:.3f} ms\n\n"
+    
+    summary_text += "➤ MACRO-AVERAGED BENCHMARK SCORES:\n"
     summary_text += f"    • mAP      : {mAP*100:6.2f}%\n"
     summary_text += f"    • mPeak F1 : {mF1*100:6.2f}%\n"
     summary_text += f"    • mEER     : {mEER*100:6.2f}%\n\n"
     
-    summary_text += "➤ PER-DISTANCE DETAILS:\n"
-    summary_text += "-"*60 + "\n"
+    summary_text += "➤ PER-DISTANCE ACCURACY \& INSTANCE COUNTS:\n"
+    summary_text += "-"*65 + "\n"
     
     for dist in distances:
-        summary_text += f"  [ Distance {dist}m ]\n"
-        summary_text += f"    • Scores   -> AP: {metrics[dist]['AP']*100:5.2f}% | F1: {metrics[dist]['F1']*100:5.2f}% | EER: {metrics[dist]['EER']*100:5.2f}%\n"
-        summary_text += f"    • Counts   -> TP: {metrics[dist]['TP']:,} | FP: {metrics[dist]['FP']:,} | FN: {metrics[dist]['FN']:,}\n\n"
+        summary_text += f"  [ Association Distance d = {dist}m ]\n"
+        summary_text += f"    • Scores   -> AP: {metrics[dist]['AP']*100:5.2f}% | Peak-F1: {metrics[dist]['F1']*100:5.2f}% | EER: {metrics[dist]['EER']*100:5.2f}%\n"
+        summary_text += f"    • Standard -> Precision: {metrics[dist]['P_Final']*100:5.2f}% | Recall: {metrics[dist]['R_Final']*100:5.2f}% | F1: {metrics[dist]['F1_Final']*100:5.2f}%\n"
+        summary_text += f"    • Matrix   -> TP: {metrics[dist]['TP']:,} | FP: {metrics[dist]['FP']:,} | FN: {metrics[dist]['FN']:,}\n\n"
     
-    ax4.text(0.05, 0.95, summary_text, fontsize=12, family='monospace',
+    ax4.text(0.05, 0.95, summary_text, fontsize=11, family='monospace',
              verticalalignment='top', 
              bbox=dict(boxstyle='round,pad=1', facecolor='#f8f9fa', edgecolor='#dee2e6'))
     

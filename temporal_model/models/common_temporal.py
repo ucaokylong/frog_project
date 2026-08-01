@@ -2,14 +2,14 @@ import torch
 import torch.nn as nn
 
 class CoordAtt1D(nn.Module):
-    """ Modern Spatial-Channel Attention thay thế cho SPAAM/ECA """
+    """ Modern Spatial-Channel Attention replace SPAAM/ECA """
     def __init__(self, inp, reduction=8):
         super().__init__()
         mip = max(8, inp // reduction)
         self.pool = nn.AdaptiveAvgPool1d(1)
         self.conv1 = nn.Conv1d(inp, mip, kernel_size=1, stride=1, padding=0)
         self.bn1 = nn.BatchNorm1d(mip)
-        self.act = nn.SiLU() # SiLU (Swish) tốt hơn ReLU
+        self.act = nn.SiLU() # SiLU (Swish) is better than ReLU
         self.conv2 = nn.Conv1d(mip, inp, kernel_size=1, stride=1, padding=0)
         self.sigmoid = nn.Sigmoid()
 
@@ -24,7 +24,7 @@ class CoordAtt1D(nn.Module):
         return x * w
 
 class ConvNeXtBlock1D(nn.Module):
-    """ SOTA CNN Block (2022+) thay thế cho ResConvBlock cũ """
+    """ SOTA CNN Block (2022+) replace cho ResConvBlock cũ """
     def __init__(self, dim, drop_path=0.):
         super().__init__()
         # Depthwise conv kernel lớn (k=7)

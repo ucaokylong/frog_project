@@ -2,35 +2,27 @@ import numpy as np
 from tqdm import tqdm
 
 def proper_ap(recs, precs, points=11):
-    """ 
-    11-point interpolated AP (PASCAL VOC 2007 style).
-    Tính trung bình Precision tại 11 mức Recall (0.0, 0.1, ..., 1.0)
-    để so sánh công bằng với code benchmark gốc của tác giả DR-SPAAM.
-    """
+    """ 11-point interpolated AP (PASCAL VOC 2007 standard style). """
     new_r = np.linspace(0.0, 1.0, num=points, endpoint=True)
     new_p = []
-    for rec_threshold in new_r:
-        point_idxs = np.nonzero(recs >= rec_threshold)[0]
-        if len(point_idxs) > 0:
-            new_p.append(np.max(precs[point_idxs]))
-        else:
-            new_p.append(0.0)
-    new_p = np.array(new_p, dtype=np.float32)
+    for r_thr in new_r:
+        idxs = np.nonzero(recs >= r_thr)[0]
+        new_p.append(np.max(precs[idxs]) if len(idxs) > 0 else 0.0)
     return np.mean(new_p)
 
 def eer(recs, precs):
-    """ Equal Error Rate: điểm P xấp xỉ R. """
+    """ Equal Error Rate: point where Precision approximately equals Recall. """
     if len(precs) == 0: return 0.0
     idx = np.argmin(np.abs(precs - recs))
     return (precs[idx] + recs[idx]) / 2.0
 
 def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     """
-    Tính PR Curve theo phong cách Global Sort của tác giả.
-    all_results: list of (idx_scan, people_array)
+    Computes the PR Curve using the author's Global Sort methodology 
+    along with supplementary advanced quantitative evaluation metrics.
     """
     all_scores, all_tp_fp = [], []
-    total_gt = loader_frog.circles.shape[0] # Tổng số người thực tế trong file H5
+    total_gt = loader_frog.circles.shape[0]  # Total actual ground truth targets in h5 file
 
     for idx_scan, people in tqdm(all_results, desc=f"Benchmark matching (d={assoc_distance}m)"):
         scan_idx = loader_frog.selection[idx_scan]
@@ -40,7 +32,7 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
 
         if people is None or len(people) == 0: continue
 
-        # Sort detections theo score giảm dần
+        # Sort detections in descending order of confidence scores
         people = people[np.argsort(-people[:, 0])]
         pred_scores, pred_xy = people[:, 0], people[:, 1:3]
         used_gt = np.zeros(len(gt_xy), dtype=bool)
@@ -59,12 +51,11 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
             else:
                 all_tp_fp.append(0)
 
-    # Tính toán đường cong toàn cục
+    # Compute global curves
     all_scores, all_tp_fp = np.array(all_scores), np.array(all_tp_fp)
     
-    # Bắt lỗi nếu model không dự đoán được bất kỳ object nào
     if len(all_scores) == 0:
-        return np.array([0.0]), np.array([0.0]), 0.0, 0.0, 0.0, 0, 0, total_gt, 0
+        return np.array([0.0]), np.array([0.0]), 0.0, 0.0, 0.0, 0, total_gt, 0, 0.0, 0.0, 0.0
 
     sort_idx = np.argsort(-all_scores)
     tp_fp_sorted = all_tp_fp[sort_idx]
@@ -73,21 +64,24 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     precisions = tp_cumsum / np.arange(1, len(tp_cumsum) + 1)
     recalls = tp_cumsum / (total_gt + 1e-8)
 
-    # ĐÃ QUAY VỀ: Gọi proper_ap 11-point (truyền rõ tham số points=11)
     ap = proper_ap(recalls, precisions, points=11)
     eer_val = eer(recalls, precisions)
     f1_scores = 2 * precisions * recalls / np.clip(precisions + recalls, 1e-8, 2.0)
     
-    # Compute TP, FP, FN
+    # Compute standard confusion metrics
     tp = int(np.sum(all_tp_fp))
     fp = len(all_tp_fp) - tp
     fn = total_gt - tp
-    tn = 0  
     
-    return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, tn
+    # Compute complementary metrics at the final operational cutoff
+    final_precision = tp / (tp + fp + 1e-8)
+    final_recall = tp / (total_gt + 1e-8)
+    final_f1 = 2 * final_precision * final_recall / (final_precision + final_recall + 1e-8)
+    
+    return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, final_precision, final_recall, final_f1
 
 def compute_mean_metrics(metrics_dict):
-    """ Tính trung bình (Mean) cho AP, EER, và Peak F1 từ các mức khoảng cách. """
+    """ Computes the Macro-Averaged mean for AP, EER, and Peak F1. """
     aps, eers, f1s = [], [], []
     for dist, data in metrics_dict.items():
         aps.append(data["AP"])

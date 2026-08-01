@@ -50,7 +50,7 @@ def train():
     print(f"File trọng số sẽ được lưu đè tại: {save_path}")
 
     for epoch in range(1, EPOCHS + 1):
-        # --- Training ---
+        # --- Training ---Q
         model.train()
         total_train_loss = 0.0
         for scans_seq, gts in tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS} [Loc Train]"):

@@ -2,7 +2,7 @@ import numpy as np
 from tqdm import tqdm
 
 def proper_ap(recs, precs, points=11):
-    """ 11-point interpolated AP chuẩn benchmark. """
+    """ 11-point interpolated AP matching the benchmark standard. """
     new_r = np.linspace(0.0, 1.0, num=points, endpoint=True)
     new_p = []
     for r_thr in new_r:
@@ -11,21 +11,18 @@ def proper_ap(recs, precs, points=11):
     return np.mean(new_p)
 
 def eer(recs, precs):
-    """ Equal Error Rate: điểm P xấp xỉ R. """
+    """ Equal Error Rate: point where Precision approximately equals Recall. """
     if len(precs) == 0: return 0.0
     idx = np.argmin(np.abs(precs - recs))
     return (precs[idx] + recs[idx]) / 2.0
 
 def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     """
-    Tính PR Curve theo phong cách Global Sort của tác giả.
-    all_results: list of (idx_scan, people_array)
-    
-    Returns:
-        recalls, precisions, ap, eer_val, max_f1, tp, fp, fn, tn
+    Computes the PR Curve using the author's Global Sort methodology 
+    along with supplementary advanced quantitative evaluation metrics.
     """
     all_scores, all_tp_fp = [], []
-    total_gt = loader_frog.circles.shape[0] # Tổng số người thực tế trong file H5
+    total_gt = loader_frog.circles.shape[0] # Total actual ground truth targets in the H5 file
 
     for idx_scan, people in tqdm(all_results, desc=f"Benchmark matching (d={assoc_distance}m)"):
         scan_idx = loader_frog.selection[idx_scan]
@@ -35,7 +32,7 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
 
         if people is None or len(people) == 0: continue
 
-        # Sort detections theo score giảm dần
+        # Sort detections in descending order of confidence scores
         people = people[np.argsort(-people[:, 0])]
         pred_scores, pred_xy = people[:, 0], people[:, 1:3]
         used_gt = np.zeros(len(gt_xy), dtype=bool)
@@ -54,7 +51,7 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
             else:
                 all_tp_fp.append(0)
 
-    # Tính toán đường cong toàn cục
+    # Compute global curves
     all_scores, all_tp_fp = np.array(all_scores), np.array(all_tp_fp)
     sort_idx = np.argsort(-all_scores)
     tp_fp_sorted = all_tp_fp[sort_idx]
@@ -67,10 +64,14 @@ def compute_pr_curve_expert(loader_frog, all_results, assoc_distance=0.5):
     eer_val = eer(recalls, precisions)
     f1_scores = 2 * precisions * recalls / np.clip(precisions + recalls, 1e-8, 2.0)
     
-    # Compute TP, FP, FN
+    # Compute standard confusion metrics
     tp = int(np.sum(all_tp_fp))
     fp = len(all_tp_fp) - tp
     fn = total_gt - tp
-    tn = 0  # Not applicable for detection tasks
     
-    return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, tn
+    # Compute complementary metrics at the final operational cutoff
+    final_precision = tp / (tp + fp + 1e-8)
+    final_recall = tp / (total_gt + 1e-8)
+    final_f1 = 2 * final_precision * final_recall / (final_precision + final_recall + 1e-8)
+    
+    return recalls, precisions, ap, eer_val, np.max(f1_scores), tp, fp, fn, final_precision, final_recall, final_f1
