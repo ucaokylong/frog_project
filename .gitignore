@@ -14,9 +14,9 @@ mlruns/
 data/*.h5
 results/*.npz
 
-*.log
+# *.log
 *.sh
 *.h5
 *.pth
 *.png
-*.npz
+# *.npz
